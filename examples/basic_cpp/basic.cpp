@@ -33,16 +33,16 @@ struct coroutine_output {
 
 FUTURE(coroutine_future, struct coroutine_data, struct coroutine_output);
 
-struct async_memcpy_resume_data {
-	FUTURE_CHAIN_ENTRY(struct vdm_memcpy_future, memcpy);
-	FUTURE_CHAIN_ENTRY(struct coroutine_future, resume);
-};
+// struct async_memcpy_resume_data {
+// 	FUTURE_CHAIN_ENTRY(struct vdm_memcpy_future, memcpy);
+// 	FUTURE_CHAIN_ENTRY(struct coroutine_future, resume);
+// };
 
-struct async_memcpy_resume_output {
-};
+// struct async_memcpy_resume_output {
+// };
 
-FUTURE(async_memcpy_resume_fut, struct async_memcpy_resume_data,
-		struct async_memcpy_resume_output);
+// FUTURE(async_memcpy_resume_fut, struct async_memcpy_resume_data,
+// 		struct async_memcpy_resume_output);
 
 struct simple_future::promise_type {
 	simple_future get_return_object() { return simple_future(handle_type::from_promise(*this)); }
@@ -52,7 +52,7 @@ struct simple_future::promise_type {
 	void unhandled_exception() {}
 
 	struct vdm *pthread_mover;
-	struct async_memcpy_resume_fut fut;
+	struct coroutine_future fut;
 };
 
 void simple_future::wait(struct runtime *r)
@@ -63,7 +63,7 @@ void simple_future::wait(struct runtime *r)
 simple_future::~simple_future() { 
 	if (h) { 
 		vdm_delete(h.promise().pthread_mover);
-		h.destroy();
+		// h.destroy();
 	}
 }
 
@@ -99,17 +99,7 @@ auto async_memcpy(void *dst, void *src, size_t n)
 		bool await_ready() { return false; /* always suspend (call await_suspend) */ }
 		void await_suspend(std::coroutine_handle<simple_future::promise_type> h) {
 			auto pthread_mover = vdm_new(vdm_descriptor_pthreads());
-			auto &chain = h.promise().fut;
-
-			h.promise().pthread_mover = pthread_mover;
-
-			FUTURE_CHAIN_ENTRY_INIT(&chain.data.memcpy,
-						vdm_memcpy(pthread_mover, dst, src, n),
-						NULL, NULL);
-			FUTURE_CHAIN_ENTRY_INIT(&chain.data.resume, resume_coroutine(h),
-						NULL, NULL);
-
-			FUTURE_CHAIN_INIT(&chain);
+			h.promise().fut = resume_coroutine(h);
 		}
 
 		void await_resume() {}

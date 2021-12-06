@@ -43,7 +43,7 @@ async_chain_impl(struct future_context *ctx, struct future_waker waker)
 	while (entry != NULL) {
 		used_data += sizeof(struct future_chain_entry) +
 			future_context_get_size(&entry->future.context);
-		struct future_chain_entry *next = used_data != ctx->data_size
+		struct future_chain_entry *next = used_data < ctx->data_size
 			? (struct future_chain_entry *)(data + used_data)
 			: NULL;
 		if (entry->future.context.state != FUTURE_STATE_COMPLETE) {
