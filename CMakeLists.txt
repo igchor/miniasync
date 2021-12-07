@@ -34,6 +34,8 @@ option(TESTS_USE_VALGRIND "enable tests with valgrind (if found)" ON)
 set(TEST_DIR ${CMAKE_CURRENT_BINARY_DIR}/test
 	CACHE STRING "working directory for tests")
 
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fcoroutines")
+
 include(FindPerl)
 include(FindThreads)
 include(CMakePackageConfigHelpers)
