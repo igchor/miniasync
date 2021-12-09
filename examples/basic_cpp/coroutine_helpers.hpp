@@ -25,12 +25,12 @@ struct task {
           bool await_ready() const noexcept { return false; }
           void await_resume() noexcept {}
 
-          std::coroutine_handle<> await_suspend(std::coroutine_handle<task::promise_type> h) noexcept {
-			  auto &cont = h.promise().cont;
-              return cont ? cont : std::noop_coroutine();
+          void await_suspend(std::coroutine_handle<task::promise_type> h) noexcept {
+			        auto &cont = h.promise().cont;
+              if (cont)
+                cont.resume();
           }
       };
-
 
     task get_return_object() { return task{std::coroutine_handle<task::promise_type>::from_promise(*this)}; }
     std::suspend_always initial_suspend() { return {}; }
@@ -38,7 +38,10 @@ struct task {
     void return_void() {}
     void unhandled_exception() {}
 
-    std::coroutine_handle<> cont;
+    using future_type = std::pair<struct future_poller, std::coroutine_handle<>>;
+
+    std::vector<future_type> futures;
+    std::coroutine_handle<task::promise_type> cont;
   };
 
   void wait() {
@@ -46,7 +49,7 @@ struct task {
   }
 
   bool await_ready() { return !h || h.done();}
-    std::coroutine_handle<> await_suspend(std::coroutine_handle<> aw) {
+    std::coroutine_handle<> await_suspend(std::coroutine_handle<task::promise_type> aw) {
       h.promise().cont = aw;
       return h;
     }
@@ -56,51 +59,16 @@ struct task {
 };
 
 namespace detail {
-struct when_all_task {
-  struct promise_type {
-	  std::atomic<int> *counter;
-	  std::coroutine_handle<> continuation;
-
-	void start(std::atomic<int>& counter, std::coroutine_handle<> continuation)
-  	{
-		this->counter = &counter;
-		this->continuation = continuation;
-
-		std::coroutine_handle<when_all_task::promise_type>::from_promise(*this).resume();
-  	}
-
-      struct final_awaitable
-      {
-          bool await_ready() const noexcept { return false; }
-          void await_resume() noexcept {}
-
-          void await_suspend(std::coroutine_handle<when_all_task::promise_type> h) noexcept {
-			  auto cnt = h.promise().counter->fetch_sub(1);
-			  if (cnt - 1 == 0) {
-				h.promise().continuation.resume();
-			  }
-          }
-      };
-
-    when_all_task get_return_object() { return when_all_task{std::coroutine_handle<when_all_task::promise_type>::from_promise(*this)}; }
-    std::suspend_always initial_suspend() { return {}; }
-    auto final_suspend() noexcept { return final_awaitable{}; }
-    void return_void() {}
-    void unhandled_exception() {}
-  };
-
-  void start(std::atomic<int>& counter, std::coroutine_handle<> continuation)
-  {
-	  h.promise().start(counter, continuation);
-  }
-
-  std::coroutine_handle<when_all_task::promise_type> h;
-};
 
 template <typename Awaitable>
-when_all_task make_when_all_task(Awaitable awaitable)
+task when_all_task(Awaitable awaitable, std::atomic<int> &counter, std::coroutine_handle<> h)
 {
-	co_await awaitable;
+  co_await awaitable;
+
+  auto cnt = counter.fetch_sub(1);
+	if (cnt - 1 == 0) {
+	  h.resume();
+	}
 }
 
 template <typename Task>
@@ -119,7 +87,7 @@ struct when_all_ready_awaitable
 	{
 		for (auto&& task : tasks)
 		{
-			task.start(counter, h);
+			when_all_task(std::move(task), counter, h).h.resume();
 		}
 	}
 
@@ -130,15 +98,16 @@ struct when_all_ready_awaitable
 };
 }
 
-template <typename... Awaitables>
-auto when_all(Awaitables&&... awaitables)
+template <typename A, typename... Awaitables>
+auto when_all(A&& aw, Awaitables&&... awaitables)
 {
-	std::vector<detail::when_all_task> tasks;
+	std::vector<std::remove_reference_t<A>> tasks;
+  tasks.emplace_back(std::move<A>(aw));
 
 	for (auto &&a : {awaitables...})
-		tasks.emplace_back(detail::make_when_all_task(std::move(a)));
+		tasks.emplace_back(std::move(a));
 
 	return detail::when_all_ready_awaitable(std::move(tasks));
 }
 
-#endif MINIASYNC_COROUTINE_HELPERS
+#endif

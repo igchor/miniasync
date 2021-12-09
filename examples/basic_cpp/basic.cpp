@@ -12,16 +12,11 @@
 
 #include "coroutine_helpers.hpp"
 
-/* Container from which executor will take futures to execute */
-std::vector<struct vdm_memcpy_future> futures;
-/* continuations[x] is a handle to coroutine to be resumed after futures[x] */
-std::vector<std::coroutine_handle<>> continuations;
-
 struct memcpy_task
 {
 	memcpy_task(char *dst, char *src, size_t n) {
-		pthread_mover = std::shared_ptr<vdm>(vdm_new(vdm_descriptor_pthreads()), &vdm_delete);
-		fut = vdm_memcpy(pthread_mover.get(), (void*)dst, (void*)src, n);
+		auto *pthread_mover = vdm_new(vdm_descriptor_pthreads());
+		fut = vdm_memcpy(pthread_mover, (void*)dst, (void*)src, n);
 	}
 
 	bool await_ready()
@@ -29,37 +24,45 @@ struct memcpy_task
 		return false;
 	}
 
-	void await_suspend(std::coroutine_handle<> h)
+	void await_suspend(std::coroutine_handle<task::promise_type> h)
 	{
-		futures.emplace_back(fut);
-		continuations.emplace_back(h);
+		auto &futures = h.promise().futures;
+		futures.emplace_back();
+
+		future_poll(&fut, &futures.back().first);
+		h.promise().futures.back.second = h;
 	}
 
 	void await_resume() {}
 
-	// XXX: change to unique_ptr after fixing when_all_awaitable
-	std::shared_ptr<vdm> pthread_mover;
 	struct vdm_memcpy_future fut;
 };
 
 /* Executor loop */
-void wait(struct runtime *r)
+void wait(task& t)
 {
-	/* Inside this loop, we move `futures` and `continuations` to local
-	 * variables and execute them. During the execution, coroutines
-	 * might put some more work to be done into `futures` and `continuations`. */
+	t.h.resume();
+
+	auto &futures = t.h.promise().futures;
 	while (futures.size()) {
-		auto futures_snapshot = std::move(futures);
-		auto continuations_snapshot = std::move(continuations);
+		// XXX - optimize this for single future case,
+		// it's not optimal to allocate new vector each time
+		using futures_set = std::unordered_set<task::promise_type::future_type>;
+		futures_set f_set = futures_set(futures.begin(), futures.end());
+		
+		int completed = 0;
+		while (f_set.size()) {
+			// XXX: can use umwait
 
-		// XXX: can we avoid this loop?
-		std::vector<future*> futs;
-		for (auto &f : futures_snapshot)
-			futs.emplace_back(FUTURE_AS_RUNNABLE(&f));
-
-		runtime_wait_multiple(r, futs.data(), futs.size());
-		for (auto &c : continuations_snapshot)
-			c.resume();
+			for (auto f_it = f_set.begin(); f_it != f_set.end();) {
+				if (*f_it->first.ptr_to_monitor) {
+					f_it->second.resume();
+					f_it = f_set.erase(f_it);
+				} else {
+					f_it++;
+				}
+			}
+		}
 	}
 }
 
@@ -81,10 +84,10 @@ task async_mempcy(char *dst, char *src, size_t n)
 
 task async_memcpy_print(char *dst, char *src, size_t n, std::string to_print)
 {
-	auto a1 = async_mempcy(dst, src, n/2);
-	auto a2 = async_mempcy(dst + n/2, src + n/2, n - n/2);
+	co_await async_mempcy(dst, src, n/2);
+	// auto a2 = async_mempcy(dst + n/2, src + n/2, n - n/2);
 
-	co_await when_all(a1, a2);
+	// co_await when_all(a1, a2);
 
 	std::cout << to_print << std::endl;
 }
@@ -104,8 +107,7 @@ main(int argc, char *argv[])
 
 		std::cout << "inside main" << std::endl;
 
-		future.h.resume();
-		wait(r);
+		wait(future);
 
 		std::cout << buffer << std::endl;
 	}
