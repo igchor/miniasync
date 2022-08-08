@@ -19,7 +19,7 @@ typedef void *(*memset_fn)(void *str, int c, size_t n,
 
 struct data_mover_threads;
 struct data_mover_threads *data_mover_threads_new(size_t nthreads,
-	size_t ringbuf_size, enum future_notifier_type desired_notifier);
+	size_t ringbuf_size, enum future_notifier_type desired_notifier, int (*handle_sigjmp)());
 struct data_mover_threads *data_mover_threads_default();
 struct vdm *data_mover_threads_get_vdm(struct data_mover_threads *dmt);
 void data_mover_threads_delete(struct data_mover_threads *dmt);

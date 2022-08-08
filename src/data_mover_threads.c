@@ -35,6 +35,7 @@ struct data_mover_threads {
 	os_thread_t *threads;
 	struct membuf *membuf;
 	enum future_notifier_type desired_notifier;
+	int (*handle_sigjmp)();
 };
 
 struct data_mover_threads_data {
@@ -141,6 +142,8 @@ data_mover_threads_loop(void *arg)
 	struct data_mover_threads_data *tdata;
 
 	while (1) {
+		if (dmt_threads->handle_sigjmp && dmt_threads->handle_sigjmp())
+			return NULL;
 		/*
 		 * Worker thread is trying to dequeue from ringbuffer,
 		 * if he fails, he's waiting until something is added to
@@ -282,7 +285,7 @@ static struct vdm data_mover_threads_vdm = {
  */
 struct data_mover_threads *
 data_mover_threads_new(size_t nthreads, size_t ringbuf_size,
-	enum future_notifier_type desired_notifier)
+	enum future_notifier_type desired_notifier, int (*handle_sigjmp)()) 
 {
 	struct data_mover_threads *dmt_threads =
 		malloc(sizeof(struct data_mover_threads));
@@ -304,6 +307,7 @@ data_mover_threads_new(size_t nthreads, size_t ringbuf_size,
 	dmt_threads->nthreads = nthreads;
 	dmt_threads->threads = malloc(sizeof(os_thread_t) *
 		dmt_threads->nthreads);
+	dmt_threads->handle_sigjmp = handle_sigjmp;
 	if (dmt_threads->threads == NULL)
 		goto threads_array_failed;
 
@@ -337,7 +341,7 @@ data_mover_threads_default()
 {
 	return data_mover_threads_new(DATA_MOVER_THREADS_DEFAULT_NTHREADS,
 		DATA_MOVER_THREADS_DEFAULT_RINGBUF_SIZE,
-		FUTURE_NOTIFIER_WAKER);
+		FUTURE_NOTIFIER_WAKER, NULL);
 }
 
 /*
